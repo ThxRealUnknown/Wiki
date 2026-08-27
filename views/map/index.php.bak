@@ -1,0 +1,327 @@
+<?php
+
+/**
+ * The world map: three layers of the same world, every traced region drawn on
+ * the layer it belongs to.
+ *
+ * All layers are rendered into the page and hidden with CSS rather than being
+ * fetched on demand — there are only three, the artwork is already cached by
+ * the browser, and switching then costs nothing.
+ *
+ * @var array  $layers   every layer, with its artwork path
+ * @var array  $byLayer  regions keyed by layer id
+ * @var array  $pathsByLayer traced paths keyed by layer id
+ * @var string $layer    the layer to open on, or '' if there are none
+ * @var int    $focus    an entry id to pick out, or 0
+ * @var int    $width    the shared coordinate space
+ * @var int    $height
+ * @var string $title    the page's own name, user-editable
+ * @var string $epoch    the page's own caption, user-editable
+ * @var bool   $drawn    whether any artwork exists yet
+ */
+
+$total = 0;
+foreach ($byLayer as $regions) {
+    $total += count($regions);
+}
+$totalPoints = 0;
+foreach ($pointsByLayer as $points) {
+    $totalPoints += count($points);
+}
+$totalPaths = 0;
+foreach ($pathsByLayer as $paths) {
+    $totalPaths += count($paths);
+}
+?>
+<div class="single-col">
+    <div class="page page--wide">
+        <div class="page-head">
+            <div class="crumbs"><span>World map</span></div>
+            <h1 class="page-title">
+                <?= e($title) ?>
+                <button type="button" class="btn btn--ghost btn--sm" data-open-dialog="map-info">✎ Edit</button>
+            </h1>
+            <p class="field-help"><?= e($epoch) ?></p>
+        </div>
+
+        <?php if ($layers === []): ?>
+            <div class="empty-state">
+                <span class="empty-state-icon">🗺️</span>
+                <h3>No maps yet</h3>
+                <p>
+                    Add one with the <strong>＋ Add map</strong> button below — upload artwork
+                    at roughly <?= (int) $width ?>&times;<?= (int) $height ?> and give it a name.
+                </p>
+            </div>
+        <?php elseif (!$drawn): ?>
+            <div class="empty-state">
+                <span class="empty-state-icon">🗺️</span>
+                <h3>No artwork yet</h3>
+                <p>
+                    Regions can still be traced without it; it simply has nothing to sit on.
+                </p>
+            </div>
+        <?php endif; ?>
+
+        <?php // Trailing slash trimmed so the JS can append "/map/assign" and
+              // land correctly whether the app sits at the root or under a folder. ?>
+        <div class="worldmap" data-worldmap
+             data-base="<?= e(rtrim(url('/'), '/')) ?>"
+             data-width="<?= (int) $width ?>" data-height="<?= (int) $height ?>"
+             data-focus="<?= (int) $focus ?>">
+
+            <div class="worldmap-bar">
+                <div class="worldmap-layers" role="tablist" aria-label="Map layer">
+                    <?php foreach ($layers as $id => $definition): ?>
+                        <button type="button" class="btn btn--sm worldmap-layer<?= $id === $layer ? ' is-active' : '' ?>"
+                                data-worldmap-layer="<?= e($id) ?>" role="tab"
+                                aria-selected="<?= $id === $layer ? 'true' : 'false' ?>">
+                            <?= e($definition['label']) ?>
+                            <span class="worldmap-count">
+                                <?= count($byLayer[$id] ?? []) + count($pointsByLayer[$id] ?? []) + count($pathsByLayer[$id] ?? []) ?>
+                            </span>
+                        </button>
+                    <?php endforeach; ?>
+                </div>
+
+                <button type="button" class="btn btn--sm" data-open-dialog="new-map">＋ Add map</button>
+
+                <?php if ($layer !== ''): ?>
+                    <form method="post" action="<?= e(url('/map/layers/delete')) ?>"
+                          data-confirm="Are you sure that you want to remove the map and all saved shapes and points?">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="slug" value="<?= e($layer) ?>" data-worldmap-delete-slug>
+                        <button type="submit" class="btn btn--sm btn--danger">🗑 Remove map</button>
+                    </form>
+                <?php endif; ?>
+            </div>
+
+            <?php if ($layer !== ''): ?>
+                <div class="worldmap-bar">
+                    <button type="button" class="btn btn--sm worldmap-mode" data-trace-start>✎ Trace a shape</button>
+                    <button type="button" class="btn btn--sm worldmap-mode" data-tracepath-start>〰 Trace a path</button>
+                    <button type="button" class="btn btn--sm worldmap-mode" data-point-start>◎ Place a point</button>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn--ghost btn--sm" data-worldmap-reset>Reset view</button>
+                </div>
+            <?php endif; ?>
+
+            <?php
+            // One panel for the whole job, opened the moment a mode is chosen
+            // and left in place until it is finished. Drawing and naming used to
+            // be two panels that swapped, which moved the map twice per shape.
+            ?>
+            <div class="trace-assign" data-trace-assign hidden>
+                <div class="trace-assign-head">
+                    <strong data-assign-title>Assign this shape</strong>
+                    <span class="field-help" data-trace-layer-name></span>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn--ghost btn--sm" data-trace-discard>Cancel</button>
+                </div>
+
+                <?php // While tracing. ?>
+                <div class="trace-controls" data-trace-controls hidden>
+                    <span class="trace-hint">
+                        Click to form a path. <strong data-trace-count>0</strong> points.
+                    </span>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn--ghost btn--sm" data-trace-undo>Undo point</button>
+                </div>
+
+                <?php // While placing. ?>
+                <div class="trace-controls" data-point-controls hidden>
+                    <span class="trace-hint" data-point-hint>Click the spot on the map.</span>
+                </div>
+
+                <div class="symbol-picker" data-symbol-picker hidden>
+                    <span class="field-help">Symbol</span>
+                    <?php foreach (App\WorldMap::symbols() as $sid => $sym): ?>
+                        <button type="button" class="symbol-option<?= $sid === App\WorldMap::DEFAULT_SYMBOL ? ' is-active' : '' ?>"
+                                data-symbol="<?= e($sid) ?>" title="<?= e($sym['label']) ?>">
+                            <?= e($sym['glyph']) ?>
+                        </button>
+                    <?php endforeach; ?>
+                </div>
+
+                <input class="input" type="search" placeholder="Search entries…"
+                       data-trace-search aria-label="Search entries">
+                <ul class="trace-results" data-trace-results></ul>
+
+                <?php
+                // Picking an entry
+                ?>
+                <div class="trace-assign-foot">
+                    <span class="trace-chosen" data-trace-chosen hidden></span>
+                    <p class="field-help" data-trace-note></p>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn--primary btn--sm" data-trace-save>
+                        Save shape
+                    </button>
+                </div>
+            </div>
+
+            <div class="worldmap-stage" data-worldmap-stage>
+                <svg class="worldmap-svg" data-worldmap-svg
+                     viewBox="0 0 <?= (int) $width ?> <?= (int) $height ?>"
+                     preserveAspectRatio="xMidYMid meet">
+
+                    <?php foreach ($layers as $id => $definition): ?>
+                        <g class="worldmap-layer-group" data-layer="<?= e($id) ?>"
+                            <?= $id === $layer ? '' : 'hidden' ?>>
+
+                            <?php if (!empty($definition['image'])): ?>
+                                <image draggable="false" href="<?= e(asset($definition['image'])) ?>"
+                                       x="0" y="0" width="<?= (int) $width ?>" height="<?= (int) $height ?>"
+                                       preserveAspectRatio="none"/>
+                            <?php else: ?>
+                                <rect width="100%" height="100%" class="mapcut-blank"/>
+                            <?php endif; ?>
+
+                            <?php foreach (($byLayer[$id] ?? []) as $region): ?>
+                                <a href="<?= e(url($region['url'])) ?>"
+                                   class="worldmap-region<?= $region['entry_id'] === $focus ? ' is-focused' : '' ?>"
+                                   data-title="<?= e($region['title']) ?>"
+                                   data-archive="<?= e($region['archive']) ?>"
+                                   data-icon="<?= e($region['icon'] ?: '•') ?>"
+                                   data-entry="<?= (int) $region['entry_id'] ?>">
+                                    <path d="<?= e($region['d']) ?>"
+                                          style="--region-color: <?= e($region['color'] ?: 'var(--accent)') ?>"/>
+                                </a>
+                            <?php endforeach; ?>
+
+                            <?php // Visibility: Points > Paths > Regions ?>
+                            <?php foreach (($pathsByLayer[$id] ?? []) as $mapPath): ?>
+                                <a href="<?= e(url($mapPath['url'])) ?>"
+                                   class="worldmap-path<?= $mapPath['entry_id'] === $focus ? ' is-focused' : '' ?>"
+                                   data-title="<?= e($mapPath['title']) ?>"
+                                   data-archive="<?= e($mapPath['archive']) ?>"
+                                   data-icon="<?= e($mapPath['icon'] ?: '•') ?>"
+                                   data-entry="<?= (int) $mapPath['entry_id'] ?>"
+                                   style="--region-color: <?= e($mapPath['color'] ?: 'var(--accent)') ?>">
+                                    <path d="<?= e($mapPath['d']) ?>" class="worldmap-path-hit"/>
+                                    <path d="<?= e($mapPath['d']) ?>" class="worldmap-path-line"/>
+                                </a>
+                            <?php endforeach; ?>
+
+                            <?php // Visibility: Points > Regions ?>
+                            <?php foreach (($pointsByLayer[$id] ?? []) as $point): ?>
+                                <a href="<?= e(url($point['url'])) ?>"
+                                   class="worldmap-point<?= $point['entry_id'] === $focus ? ' is-focused' : '' ?>"
+                                   data-title="<?= e($point['title']) ?>"
+                                   data-archive="<?= e($point['archive']) ?>"
+                                   data-icon="<?= e($point['icon'] ?: '•') ?>"
+                                   data-entry="<?= (int) $point['entry_id'] ?>"
+                                   style="--region-color: <?= e($point['color'] ?: 'var(--accent)') ?>">
+                                    <text x="<?= (float) $point['x'] ?>" y="<?= (float) $point['y'] ?>"
+                                          class="worldmap-point-glyph"><?= e($point['glyph']) ?></text>
+                                    <circle cx="<?= (float) $point['x'] ?>" cy="<?= (float) $point['y'] ?>"
+                                            r="26" class="worldmap-point-hit"/>
+                                </a>
+                            <?php endforeach; ?>
+                        </g>
+                    <?php endforeach; ?>
+
+                    <?php // The point being placed right now. ?>
+                    <g class="point-layer" data-point-layer hidden>
+                        <?php // Previews the symbol that will be placed, at the
+ // size a real point is drawn, so what you see is what you get. ?>
+                        <text class="point-ghost" data-point-ghost x="-999" y="-999">●</text>
+                    </g>
+
+                    <?php // The shape being drawn right now. ?>
+                    <g class="trace-layer" data-trace-layer hidden>
+                        <path class="trace-path" data-trace-path/>
+                        <g data-trace-points></g>
+                    </g>
+                </svg>
+
+                <div class="worldmap-tip" data-worldmap-tip hidden></div>
+            </div>
+
+            <?php
+            // Everything on the open layer, so a crowded map can be thinned out.
+            // Rebuilt per layer by app.js rather than re-rendered from the
+            // server, since every layer is already in the page.
+            ?>
+            <details class="worldmap-list" data-worldmap-list <?= $total + $totalPoints > 0 ? 'open' : '' ?>>
+                <summary>
+                    On this layer
+                    <span class="worldmap-count" data-list-count>0</span>
+                </summary>
+                <div class="worldmap-list-actions">
+                    <button type="button" class="btn btn--ghost btn--sm" data-list-all>Show all</button>
+                    <button type="button" class="btn btn--ghost btn--sm" data-list-none>Hide all</button>
+                </div>
+                <ul class="worldmap-list-items" data-list-items></ul>
+            </details>
+
+            <p class="field-help worldmap-hint">
+                <?php if ($total === 0): ?>
+                    Nothing traced yet. Add a <strong>Map area</strong> field to a layout,
+                    then give an entry its shape.
+                <?php else: ?>
+                    Scroll to zoom, drag to pan. <?= (int) $total ?>
+                    <?= $total === 1 ? 'region' : 'regions' ?> traced.
+                <?php endif; ?>
+            </p>
+        </div>
+    </div>
+</div>
+
+<dialog id="new-map">
+    <form method="post" action="<?= e(url('/map/layers/create')) ?>" enctype="multipart/form-data">
+        <?= csrf_field() ?>
+        <div class="dialog-body">
+            <h2 class="dialog-title">New map</h2>
+            <p class="dialog-sub">Upload the artwork and give it a name.</p>
+
+            <div class="dialog-fields">
+                <div>
+                    <label for="new-map-label">Name</label>
+                    <input class="input" id="new-map-label" type="text" name="label" required
+                           placeholder="Floating Islands" autocomplete="off">
+                </div>
+                <div>
+                    <label for="new-map-image">Image</label>
+                    <input class="file-input" id="new-map-image" type="file" name="image"
+                           accept="image/*" required>
+                    <p class="field-help">
+                        Suggested image size: <?= (int) $width ?>&times;<?= (int) $height ?>px.
+                    </p>
+                </div>
+            </div>
+
+            <div class="dialog-foot">
+                <button class="btn btn--ghost" type="button" data-close-dialog>Cancel</button>
+                <button class="btn btn--primary" type="submit">Add map</button>
+            </div>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="map-info">
+    <form method="post" action="<?= e(url('/map/info')) ?>">
+        <?= csrf_field() ?>
+        <div class="dialog-body">
+            <h2 class="dialog-title">Edit map details</h2>
+
+            <div class="dialog-fields">
+                <div>
+                    <label for="map-info-title">Name</label>
+                    <input class="input" id="map-info-title" type="text" name="title" required
+                           value="<?= e($title) ?>">
+                </div>
+                <div>
+                    <label for="map-info-epoch">Description</label>
+                    <input class="input" id="map-info-epoch" type="text" name="epoch"
+                           value="<?= e($epoch) ?>">
+                </div>
+            </div>
+
+            <div class="dialog-foot">
+                <button class="btn btn--ghost" type="button" data-close-dialog>Cancel</button>
+                <button class="btn btn--primary" type="submit">Save</button>
+            </div>
+        </div>
+    </form>
+</dialog>

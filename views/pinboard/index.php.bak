@@ -1,0 +1,151 @@
+<?php
+
+/**
+ * The pinboard: one entry pinned up, and whatever the reader chooses to open
+ * out from it.
+ *
+ * Nothing is drawn on the server. The page arrives empty apart from the pin it
+ * was asked to start from, and every pin after that is fetched as it is asked
+ * for — which is the whole point: the graph has 942 strings in it, and all of
+ * them at once is a picture of nothing.
+ *
+ * @var int   $startId    the entry to open on, or 0
+ * @var string $startName
+ * @var array $busiest    suggestions for a cold start
+ * @var array $archives   every archive, for the column that filters the board
+ */
+?>
+<div class="single-col">
+    <div class="page">
+        <div class="page-head">
+            <div class="crumbs"><span>Pinboard</span></div>
+            <h1 class="page-title">Pinboard</h1>
+            <p class="field-help">
+                Pin an entry, then click it to open out what it is tied to.
+                Click again to fold it back in.
+            </p>
+        </div>
+
+        <?php // Trailing slash trimmed so the script can append its own paths. ?>
+        <div class="pinboard" data-pinboard
+             data-base="<?= e(rtrim(url('/'), '/')) ?>"
+             data-start="<?= (int) $startId ?>">
+
+            <div class="pinboard-bar">
+                <div class="relation-field pinboard-find">
+                    <input class="relation-search" type="text" autocomplete="off"
+                           placeholder="Pin an entry…" aria-label="Pin an entry"
+                           data-pinboard-search>
+                    <ul class="relation-results" data-pinboard-results hidden></ul>
+                </div>
+
+                <span class="pinboard-spacer"></span>
+
+                <?php // Both kinds of string are shown at once, and either can
+                      // be taken out of the picture without losing the pins. ?>
+                <label class="pinboard-toggle">
+                    <input type="checkbox" checked data-pinboard-kind="connection">
+                    <span class="pinboard-swatch pinboard-swatch--connection"></span>
+                    Connections
+                </label>
+                <label class="pinboard-toggle">
+                    <input type="checkbox" checked data-pinboard-kind="field">
+                    <span class="pinboard-swatch pinboard-swatch--field"></span>
+                    Field links
+                </label>
+
+                <button type="button" class="btn btn--ghost btn--sm" data-pinboard-fit>Fit</button>
+                <button type="button" class="btn btn--ghost btn--sm" data-pinboard-clear>Clear</button>
+            </div>
+
+            <div class="pinboard-body">
+            <?php
+            // Which archives the board may show. Every one is listed here and
+            // switched on; the script marks whichever this reader had put away.
+            // Rendering them all means an archive made later is on by default
+            // rather than missing from a list saved before it existed.
+            $renderFilter = static function (array $nodes, int $depth) use (&$renderFilter): string {
+                $html = '';
+
+                foreach ($nodes as $node) {
+                    $html .= '<label class="pinboard-archive'
+                        . ($depth > 0 ? ' pinboard-archive--child' : '') . '"'
+                        . ' style="--archive-color: ' . e($node['color'] ?: 'var(--accent)') . '">'
+                        . '<input type="checkbox" checked'
+                        . ' data-pinboard-archive="' . (int) $node['id'] . '">'
+                        . '<span class="archive-icon">' . e($node['icon'] ?: '•') . '</span>'
+                        . '<span class="pinboard-archive-name">' . e($node['name']) . '</span>'
+                        . '<span class="archive-count">' . (int) $node['entry_count'] . '</span>'
+                        . '</label>';
+
+                    $html .= $renderFilter($node['children'] ?? [], $depth + 1);
+                }
+
+                return $html;
+            };
+            ?>
+            <aside class="pinboard-filter" data-pinboard-filter>
+                <div class="pinboard-filter-head">
+                    <h2 class="rail-title">Archives</h2>
+                    <button type="button" class="pinboard-filter-all" data-pinboard-archives-all>
+                        All
+                    </button>
+                </div>
+
+                <div class="pinboard-filter-list">
+                    <?= $renderFilter($archives, 0) ?>
+                </div>
+
+                <p class="field-help pinboard-filter-note">
+                    Switching an archive off takes its entries off the board and
+                    stops them being brought in.
+                </p>
+            </aside>
+
+            <div class="pinboard-stage" data-pinboard-stage>
+                <div class="pinboard-canvas" data-pinboard-canvas>
+                    <svg class="pinboard-strings" data-pinboard-strings
+                         width="6000" height="4500" viewBox="0 0 6000 4500"
+                         aria-hidden="true"></svg>
+                    <div class="pinboard-pins" data-pinboard-pins></div>
+                </div>
+
+                <div class="pinboard-blank" data-pinboard-blank <?= $startId > 0 ? 'hidden' : '' ?>>
+                    <span class="empty-state-icon">⁂</span>
+                    <h3>Nothing pinned yet</h3>
+                    <p>Search above for anything in the archives, or start from one of these.</p>
+
+                    <?php if ($busiest !== []): ?>
+                        <div class="pinboard-suggestions">
+                            <?php foreach ($busiest as $item): ?>
+                                <button type="button" class="chip pinboard-suggestion"
+                                        data-pinboard-pin="<?= (int) $item['id'] ?>"
+                                        data-pinboard-suggestion-archive="<?= (int) $item['category'] ?>"
+                                        style="--archive-color: <?= e($item['color'] ?: 'var(--accent)') ?>">
+                                    <span class="chip-icon"><?= e($item['icon']) ?></span>
+                                    <?= e($item['title']) ?>
+                                    <span class="pinboard-degree"><?= (int) $item['degree'] ?></span>
+                                </button>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <p class="pinboard-note" data-pinboard-note hidden></p>
+            </div>
+            </div>
+
+            <?php // What a string is, once one has been clicked. ?>
+            <div class="pinboard-inspect" data-pinboard-inspect hidden></div>
+
+            <p class="field-help pinboard-legend">
+                Drag a pin to move it. Each pin has two rings on its right edge:
+                the solid one ties a connection to any other pin, the dashed one
+                points one of the entry's own fields at another entry — and only
+                at the pins that field is allowed to reach. Hover a string to see
+                what it is; click it to cut it. Chapters are not on the board —
+                the rail on an entry still shows those.
+            </p>
+        </div>
+    </div>
+</div>
